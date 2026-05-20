@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Dashboard de monitoreo inteligente con IA para Nginx y MariaDB — Agente IA Inteligente" />
+  <title>Agente IA — Monitor de Sistemas</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+
+  <!-- ─── Toast container ─────────────────────────────────── -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- ─── Header ──────────────────────────────────────────── -->
+  <header class="header">
+    <div class="header-brand">
+      <div class="header-icon">🤖</div>
+      <div>
+        <div class="header-title">Agente IA Inteligente</div>
+        <div class="header-subtitle">Monitor de Sistemas · Nginx &amp; MariaDB</div>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <!-- Indicadores de componentes -->
+      <span id="ind-gemini"   class="pill blue">○ Gemini</span>
+      <span id="ind-postgres" class="pill blue">○ PostgreSQL</span>
+      <span id="ind-nginx"    class="pill blue">○ Nginx SSH</span>
+      <span id="ind-mariadb"  class="pill blue">○ MariaDB</span>
+
+      <!-- Badge de estado global -->
+      <span id="status-badge" class="status-badge warning">
+        <span class="status-dot"></span>
+        Conectando...
+      </span>
+
+      <button id="btn-refresh" class="btn btn-ghost btn-sm" title="Actualizar ahora">
+        ↻ Refresh
+      </button>
+    </div>
+  </header>
+
+  <!-- ─── Contenido principal ─────────────────────────────── -->
+  <main class="main-container">
+
+    <!-- Última actualización -->
+    <div class="flex items-center gap-2" style="margin-bottom:1.25rem">
+      <span class="refresh-hint">🕐 <span id="last-update">Cargando...</span></span>
+      <span class="refresh-hint">· Auto-refresh cada 30 segundos</span>
+    </div>
+
+    <!-- ─── Cards de métricas ──────────────────────────────── -->
+    <p class="section-title">Estado del Sistema</p>
+    <div class="cards-grid">
+
+      <!-- Card Nginx -->
+      <div class="card" id="card-nginx">
+        <div class="card-header">
+          <div class="card-icon nginx">🌐</div>
+          <span id="nginx-badge" class="pill blue">VERIFICANDO</span>
+        </div>
+        <div class="card-title">Nginx</div>
+        <div class="card-subtitle">Servidor Web — Conexiones activas</div>
+        <div class="card-metric green" id="nginx-conexiones">—</div>
+        <div class="card-meta">
+          Estado: <strong id="nginx-estado">—</strong>
+          &nbsp;·&nbsp;
+          Procesos: <strong id="nginx-procesos">—</strong>
+        </div>
+
+        <div class="divider"></div>
+        <p class="section-title">Últimos errores</p>
+        <div id="nginx-errores" style="max-height:120px;overflow:auto">
+          <div class="empty-state text-sm">Cargando...</div>
+        </div>
+      </div>
+
+      <!-- Card MariaDB -->
+      <div class="card" id="card-mariadb">
+        <div class="card-header">
+          <div class="card-icon mariadb">🗄️</div>
+          <span id="mariadb-badge" class="pill blue">VERIFICANDO</span>
+        </div>
+        <div class="card-title">MariaDB</div>
+        <div class="card-subtitle">Base de datos — Conexiones activas</div>
+        <div class="card-metric blue" id="mariadb-conexiones">—</div>
+        <div class="card-meta">
+          Queries: <strong id="mariadb-queries">—</strong>
+          &nbsp;·&nbsp;
+          Lentas: <strong id="mariadb-lentas">—</strong>
+          &nbsp;·&nbsp;
+          Uptime: <strong id="mariadb-uptime">—</strong>
+        </div>
+
+        <div class="divider"></div>
+        <p class="section-title">Queries lentas (&gt;5s)</p>
+        <div id="mariadb-lentas-list" style="max-height:120px;overflow:auto">
+          <div class="empty-state text-sm">Cargando...</div>
+        </div>
+      </div>
+
+      <!-- Card Sistema General -->
+      <div class="card" id="card-sistema">
+        <div class="card-header">
+          <div class="card-icon system">⚡</div>
+          <span class="pill green">AGENTE ACTIVO</span>
+        </div>
+        <div class="card-title">Sistema General</div>
+        <div class="card-subtitle">Resumen de componentes conectados</div>
+
+        <div style="margin-top:1rem;display:flex;flex-direction:column;gap:10px">
+          <div class="flex items-center gap-2" style="justify-content:space-between">
+            <span class="text-sm text-muted">🤖 Gemini IA</span>
+            <span id="sys-gemini" class="pill blue">—</span>
+          </div>
+          <div class="flex items-center gap-2" style="justify-content:space-between">
+            <span class="text-sm text-muted">🐘 PostgreSQL</span>
+            <span id="sys-postgres" class="pill blue">—</span>
+          </div>
+          <div class="flex items-center gap-2" style="justify-content:space-between">
+            <span class="text-sm text-muted">🌐 Nginx SSH</span>
+            <span id="sys-nginx" class="pill blue">—</span>
+          </div>
+          <div class="flex items-center gap-2" style="justify-content:space-between">
+            <span class="text-sm text-muted">🗄️ MariaDB</span>
+            <span id="sys-mariadb" class="pill blue">—</span>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+        <div class="text-sm text-muted" style="text-align:center">
+          Versión <code>1.0.0</code> · Flask 3.0 · Gemini Pro
+        </div>
+      </div>
+
+    </div><!-- /cards-grid -->
+
+    <!-- ─── Botones de acción ──────────────────────────────── -->
+    <p class="section-title">Acciones de Control</p>
+    <div class="actions-row">
+      <button id="btn-analizar" class="btn btn-primary">
+        <span class="spinner"></span>
+        <span class="btn-text">🔍 Analizar Ahora</span>
+      </button>
+      <button id="btn-reiniciar-nginx" class="btn btn-danger">
+        <span class="spinner"></span>
+        <span class="btn-text">🔄 Reiniciar Nginx</span>
+      </button>
+      <button id="btn-optimizar-bd" class="btn btn-success">
+        <span class="spinner"></span>
+        <span class="btn-text">🔧 Optimizar BD</span>
+      </button>
+    </div>
+
+    <!-- ─── Panel de análisis IA (oculto hasta usar) ──────── -->
+    <div id="analisis-panel" class="analysis-panel">
+      <!-- Se rellena por script.js -->
+    </div>
+
+    <!-- ─── Chat + Eventos ────────────────────────────────── -->
+    <div class="two-col">
+
+      <!-- Chat IA -->
+      <div>
+        <p class="section-title">Chat con el Agente IA</p>
+        <div class="chat-panel">
+          <div class="chat-header">
+            <span>🤖</span>
+            <span>Asistente IA</span>
+            <span class="pill green" style="margin-left:auto;font-size:0.7rem">EN LÍNEA</span>
+          </div>
+          <div id="chat-messages" class="chat-messages">
+            <!-- Los mensajes se agregan por JS -->
+          </div>
+          <div class="chat-input-row">
+            <input
+              id="chat-input"
+              type="text"
+              class="chat-input"
+              placeholder="Escribe tu pregunta (Enter para enviar)..."
+              autocomplete="off"
+              maxlength="1000"
+            />
+            <button id="btn-enviar" class="btn btn-primary btn-sm">
+              <span class="spinner"></span>
+              <span class="btn-text">Enviar</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Eventos recientes -->
+      <div>
+        <p class="section-title">Eventos Recientes</p>
+        <div class="events-panel">
+          <div class="panel-header">
+            <span>📋 Historial de eventos</span>
+            <button
+              class="btn btn-ghost btn-sm"
+              onclick="cargarEventos(); mostrarToast('Eventos actualizados','info',1500)"
+            >
+              Actualizar
+            </button>
+          </div>
+          <div id="eventos-lista" class="events-list">
+            <div class="empty-state">
+              <div class="empty-state-icon">📋</div>
+              Cargando eventos...
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /two-col -->
+
+    <!-- Footer -->
+    <footer style="text-align:center;padding:2rem 0;color:var(--text-muted);font-size:0.8rem;border-top:1px solid var(--border);margin-top:1rem">
+      Agente IA Inteligente &nbsp;·&nbsp; Flask 3.0 + Google Gemini &nbsp;·&nbsp;
+      Monitor: Nginx &amp; MariaDB via SSH
+    </footer>
+
+  </main>
+
+  <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+
+  <!-- Conectar indicadores del card Sistema a los mismos datos que el header -->
+  <script>
+    // Sobrescribir actualizarIndicador para también actualizar la card Sistema
+    const _orig = window.actualizarIndicador ?? function(){};
+    // Las actualizaciones de sys-* las hace actualizarHealth() en script.js
+    // Este bloque extra sincroniza los badges del card Sistema
+    document.addEventListener('DOMContentLoaded', () => {
+      const mapa = {
+        'ind-gemini':   'sys-gemini',
+        'ind-postgres': 'sys-postgres',
+        'ind-nginx':    'sys-nginx',
+        'ind-mariadb':  'sys-mariadb',
+      };
+      // Observer para sincronizar clases de los indicadores del header → card Sistema
+      Object.entries(mapa).forEach(([src, dst]) => {
+        const srcEl = document.getElementById(src);
+        const dstEl = document.getElementById(dst);
+        if (!srcEl || !dstEl) return;
+        new MutationObserver(() => {
+          dstEl.className  = srcEl.className;
+          dstEl.textContent = srcEl.textContent;
+        }).observe(srcEl, { attributes: true, childList: true, subtree: true });
+      });
+    });
+  </script>
+
+</body>
+</html>

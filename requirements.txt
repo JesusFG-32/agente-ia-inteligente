@@ -1,0 +1,31 @@
+# ============================================================
+# AGENTE IA INTELIGENTE - DEPENDENCIAS
+# ============================================================
+
+# Web Framework
+Flask==3.0.0
+Flask-CORS==4.0.0
+
+# Variables de entorno
+python-dotenv==1.0.0
+
+# Google Gemini AI
+google-generativeai==0.3.0
+
+# SSH para monitorear VPS (Nginx, MariaDB)
+paramiko==3.3.1
+
+# PostgreSQL - Base de datos principal del agente
+psycopg2-binary==2.9.9
+
+# MariaDB/MySQL
+pymysql==1.1.0
+
+# HTTP
+requests==2.31.0
+
+# Utilidades de fechas
+python-dateutil==2.8.2
+
+# Métricas del sistema local
+psutil==5.9.6

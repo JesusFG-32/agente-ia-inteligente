@@ -1,0 +1,7 @@
+# keys/.gitkeep
+# ─────────────────────────────────────────────────────────────
+# Esta carpeta almacena las claves SSH privadas.
+# NUNCA subas archivos .pem o id_rsa a git.
+# Agrega las siguientes líneas a tu .gitignore:
+#   keys/*
+#   !keys/.gitkeep
