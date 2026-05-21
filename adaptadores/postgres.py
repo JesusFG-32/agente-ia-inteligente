@@ -10,8 +10,12 @@ import logging
 from datetime import datetime
 from typing import Any, Optional
 
-import psycopg2
-import psycopg2.extras
+try:
+    import psycopg2
+    import psycopg2.extras
+    PSYCOPG2_AVAILABLE = True
+except ImportError:
+    PSYCOPG2_AVAILABLE = False
 
 logger = logging.getLogger("agente-ia.postgres")
 
@@ -39,12 +43,17 @@ class BaseDatos:
         user: str,
         password: str,
     ) -> None:
+        if not PSYCOPG2_AVAILABLE:
+            raise ImportError(
+                "La biblioteca 'psycopg2' no está instalada. "
+                "Por favor, instálala para usar la persistencia en PostgreSQL."
+            )
         self.host = host
         self.port = port
         self.database = database
         self.user = user
         self.password = password
-        self._conexion: Optional[psycopg2.extensions.connection] = None
+        self._conexion: Optional[Any] = None
         self._conectar()
         self._crear_tablas()
 

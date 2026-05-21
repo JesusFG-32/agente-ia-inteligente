@@ -118,6 +118,7 @@ async function actualizarHealth() {
     const { componentes } = data.health;
     actualizarIndicador('ind-gemini',   componentes.gemini,      'Gemini');
     actualizarIndicador('ind-postgres', componentes.postgres,    'PostgreSQL');
+    actualizarIndicador('ind-mongodb',  componentes.mongodb,     'MongoDB');
     actualizarIndicador('ind-nginx',    componentes.nginx_ssh,   'Nginx SSH');
     actualizarIndicador('ind-mariadb',  componentes.mariadb,     'MariaDB');
 
@@ -342,10 +343,11 @@ async function enviarPregunta() {
   const btn = $('btn-enviar');
   if (btn) { btn.disabled = true; btn.classList.add('btn-loading'); }
 
+  const sessionId = localStorage.getItem('chat_session_id') || 'default';
   try {
     const data = await apiFetch('/api/preguntas', {
       method: 'POST',
-      body: JSON.stringify({ pregunta: texto }),
+      body: JSON.stringify({ pregunta: texto, session_id: sessionId }),
     });
     agregarMensajeChat('agent', data.respuesta);
   } catch (err) {
@@ -493,6 +495,11 @@ function escapeHtml(str) {
 // ─── Event listeners ──────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Inicializar sesión de chat si no existe
+  if (!localStorage.getItem('chat_session_id')) {
+    localStorage.setItem('chat_session_id', 'sess_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36));
+  }
+
   // Botones de header/acciones
   const btnAnalizar = $('btn-analizar');
   if (btnAnalizar) btnAnalizar.addEventListener('click', analizarAnomalias);
@@ -512,6 +519,31 @@ document.addEventListener('DOMContentLoaded', () => {
   // Chat — botón enviar
   const btnEnviar = $('btn-enviar');
   if (btnEnviar) btnEnviar.addEventListener('click', enviarPregunta);
+
+  // Chat — nuevo chat
+  const btnNuevoChat = $('btn-nuevo-chat');
+  if (btnNuevoChat) {
+    btnNuevoChat.addEventListener('click', () => {
+      const container = $('chat-messages');
+      if (container) container.innerHTML = '';
+      
+      // Generar nuevo ID de sesión
+      const nuevoSessionId = 'sess_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+      localStorage.setItem('chat_session_id', nuevoSessionId);
+      
+      mostrarToast('Nueva conversación iniciada', 'info', 2000);
+      
+      // Mensaje de bienvenida
+      agregarMensajeChat('agent',
+        '¡Hola! He iniciado una nueva conversación limpia 🤖\n\n' +
+        'Puedo ayudarte con:\n' +
+        '• Estado de Nginx y MariaDB\n' +
+        '• Análisis de anomalías\n' +
+        '• Optimización de bases de datos\n\n' +
+        '¿En qué puedo ayudarte?'
+      );
+    });
+  }
 
   // Chat — tecla Enter
   const chatInput = $('chat-input');

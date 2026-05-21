@@ -26,6 +26,7 @@
       <!-- Indicadores de componentes -->
       <span id="ind-gemini"   class="pill blue">○ Gemini</span>
       <span id="ind-postgres" class="pill blue">○ PostgreSQL</span>
+      <span id="ind-mongodb"  class="pill blue">○ MongoDB</span>
       <span id="ind-nginx"    class="pill blue">○ Nginx SSH</span>
       <span id="ind-mariadb"  class="pill blue">○ MariaDB</span>
 
@@ -119,6 +120,10 @@
             <span id="sys-postgres" class="pill blue">—</span>
           </div>
           <div class="flex items-center gap-2" style="justify-content:space-between">
+            <span class="text-sm text-muted">🍃 MongoDB</span>
+            <span id="sys-mongodb" class="pill blue">—</span>
+          </div>
+          <div class="flex items-center gap-2" style="justify-content:space-between">
             <span class="text-sm text-muted">🌐 Nginx SSH</span>
             <span id="sys-nginx" class="pill blue">—</span>
           </div>
@@ -168,7 +173,10 @@
           <div class="chat-header">
             <span>🤖</span>
             <span>Asistente IA</span>
-            <span class="pill green" style="margin-left:auto;font-size:0.7rem">EN LÍNEA</span>
+            <button id="btn-nuevo-chat" class="btn btn-ghost btn-xs" style="margin-left:auto; font-size: 0.75rem; border: 1px solid var(--border); padding: 2px 8px; border-radius: 4px; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; gap: 4px;" title="Iniciar nueva conversación">
+              🗑️ Nuevo Chat
+            </button>
+            <span class="pill green" style="margin-left:10px;font-size:0.7rem">EN LÍNEA</span>
           </div>
           <div id="chat-messages" class="chat-messages">
             <!-- Los mensajes se agregan por JS -->
@@ -234,6 +242,7 @@
       const mapa = {
         'ind-gemini':   'sys-gemini',
         'ind-postgres': 'sys-postgres',
+        'ind-mongodb':  'sys-mongodb',
         'ind-nginx':    'sys-nginx',
         'ind-mariadb':  'sys-mariadb',
       };

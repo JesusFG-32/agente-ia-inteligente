@@ -14,7 +14,7 @@ from typing import Any, Optional
 import google.generativeai as genai
 
 import config
-from adaptadores.postgres import BaseDatos
+from adaptadores import BaseDatos, AdaptadorMongoDB
 
 logger = logging.getLogger("agente-ia.agente")
 
@@ -54,16 +54,25 @@ class AgenteIA:
     }
     """
 
-    def __init__(self, db: Optional[BaseDatos] = None) -> None:
+    def __init__(
+        self,
+        db: Optional[BaseDatos] = None,
+        mongodb: Optional[AdaptadorMongoDB] = None,
+    ) -> None:
         """
         Inicializa el agente y conecta a Google Gemini.
 
         Args:
             db: Instancia de BaseDatos para persistencia. Si no se provee,
                 se crea una nueva con la configuración del entorno.
+            mongodb: Instancia de AdaptadorMongoDB para persistir historiales de chat.
         """
         self._inicializar_gemini()
         self.db = db or self._crear_bd()
+        self.mongodb = mongodb
+        # Fallback en memoria estructurado por session_id
+        self.historiales_memoria: dict[str, list[dict]] = {}
+        # Historial legado para mantener compatibilidad
         self.historial_chat: list[dict] = []
         logger.info("AgenteIA inicializado con modelo '%s'", config.GEMINI_MODEL)
 
@@ -203,31 +212,55 @@ class AgenteIA:
 
     # ─── Chat inteligente ─────────────────────────────────────
 
-    def responder_pregunta(self, pregunta: str) -> str:
+    def responder_pregunta(self, pregunta: str, session_id: str = "default") -> str:
         """
-        Responde una pregunta en lenguaje natural sobre el sistema.
+        Responde una pregunta en lenguaje natural sobre el sistema, cargando y
+        actualizando el historial desde MongoDB o memoria.
 
         Args:
             pregunta: Pregunta del usuario en texto libre.
+            session_id: Identificador único de la sesión de chat.
 
         Returns:
             Respuesta en texto del agente.
         """
-        logger.info("Respondiendo pregunta: '%s'", pregunta[:80])
-        # Mantener historial de chat para contexto
-        self.historial_chat.append({"role": "user", "parts": [pregunta]})
+        logger.info("Respondiendo pregunta para sesión '%s': '%s'", session_id, pregunta[:80])
+
+        # 1. Obtener historial previo (MongoDB o memoria)
+        historial = []
+        if self.mongodb and self.mongodb.activo:
+            historial = self.mongodb.obtener_historial(session_id)
+        else:
+            historial = self.historiales_memoria.get(session_id, [])
+
+        # 2. Agregar mensaje del usuario
+        historial.append({"role": "user", "parts": [pregunta]})
 
         try:
-            chat = self.modelo.start_chat(history=self.historial_chat[:-1])
+            # start_chat espera el historial sin el mensaje actual, y luego se envía
+            chat = self.modelo.start_chat(history=historial[:-1])
             respuesta = chat.send_message(pregunta)
             texto_respuesta = respuesta.text
-            self.historial_chat.append({"role": "model", "parts": [texto_respuesta]})
-            # Limitar historial a las últimas 20 interacciones
-            if len(self.historial_chat) > 40:
-                self.historial_chat = self.historial_chat[-40:]
+
+            # 3. Agregar respuesta del modelo
+            historial.append({"role": "model", "parts": [texto_respuesta]})
+
+            # 4. Truncar si supera el tamaño de ventana de contexto (40 mensajes / 20 interacciones)
+            if len(historial) > 40:
+                historial = historial[-40:]
+
+            # 5. Persistir historial actualizado
+            if self.mongodb and self.mongodb.activo:
+                self.mongodb.guardar_historial(session_id, historial)
+            else:
+                self.historiales_memoria[session_id] = historial
+                # Mantener compatibilidad con el atributo legado para pruebas unitarias de sesión única
+                if session_id == "default":
+                    self.historial_chat = historial
+
             return texto_respuesta
         except Exception as e:
-            logger.error("Error respondiendo pregunta: %s", e)
+            logger.error("Error respondiendo pregunta para sesión %s: %s", session_id, e)
             return f"Lo siento, ocurrió un error al procesar tu pregunta: {e}"
 
     # ─── Persistencia ─────────────────────────────────────────
@@ -300,7 +333,12 @@ class AgenteIA:
             logger.error("Error aprendiendo patrón: %s", e)
             return {"guardado": False, "nombre_patron": None, "id": -1}
 
-    def limpiar_historial(self) -> None:
-        """Resetea el historial del chat."""
-        self.historial_chat = []
-        logger.info("Historial de chat limpiado")
+    def limpiar_historial(self, session_id: str = "default") -> None:
+        """Resetea el historial del chat para una sesión."""
+        if self.mongodb and self.mongodb.activo:
+            self.mongodb.guardar_historial(session_id, [])
+        else:
+            self.historiales_memoria[session_id] = []
+        if session_id == "default":
+            self.historial_chat = []
+        logger.info("Historial de chat para sesión '%s' limpiado", session_id)

@@ -52,6 +52,11 @@ FLASK_DEBUG: bool = os.getenv("FLASK_DEBUG", "True").lower() == "true"
 FLASK_PORT: int = int(os.getenv("FLASK_PORT", "5000"))
 SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
 
+# ─── MongoDB ─────────────────────────────────────────────────
+MONGO_URI: str = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+MONGO_DB_NAME: str = os.getenv("MONGO_DB_NAME", "agente_ia_chats")
+MONGO_COLLECTION_NAME: str = os.getenv("MONGO_COLLECTION_NAME", "conversaciones")
+
 # ─── Validación de configuración crítica ─────────────────────
 def validar_config() -> list[str]:
     """
@@ -67,6 +72,8 @@ def validar_config() -> list[str]:
         advertencias.append("⚠️  DB_PASSWORD vacía (revisa configuración PostgreSQL)")
     if SECRET_KEY == "dev-secret-key-change-in-production":
         advertencias.append("⚠️  SECRET_KEY por defecto — cambia en producción")
+    if not MONGO_URI:
+        advertencias.append("⚠️  MONGO_URI no configurado (MongoDB deshabilitado, se usará memoria)")
     return advertencias
 
 

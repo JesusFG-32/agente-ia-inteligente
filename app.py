@@ -12,9 +12,7 @@ from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 
 import config
-from adaptadores.mariadb import AdaptadorMariaDB
-from adaptadores.nginx import AdaptadorNginx
-from adaptadores.postgres import BaseDatos
+from adaptadores import AdaptadorMariaDB, AdaptadorNginx, BaseDatos, AdaptadorMongoDB
 from agente import AgenteIA
 
 # ─── Setup ────────────────────────────────────────────────────
@@ -26,6 +24,7 @@ CORS(app)
 
 # ─── Inicializar servicios (lazy) ─────────────────────────────
 _db: BaseDatos | None = None
+_mongodb: AdaptadorMongoDB | None = None
 _agente: AgenteIA | None = None
 _nginx: AdaptadorNginx | None = None
 _mariadb: AdaptadorMariaDB | None = None
@@ -47,11 +46,25 @@ def get_db() -> BaseDatos | None:
     return _db
 
 
+def get_mongodb() -> AdaptadorMongoDB | None:
+    global _mongodb
+    if _mongodb is None and config.MONGO_URI:
+        try:
+            _mongodb = AdaptadorMongoDB(
+                uri=config.MONGO_URI,
+                db_name=config.MONGO_DB_NAME,
+                collection_name=config.MONGO_COLLECTION_NAME,
+            )
+        except Exception as e:
+            logger.error("No se pudo conectar a MongoDB: %s", e)
+    return _mongodb
+
+
 def get_agente() -> AgenteIA | None:
     global _agente
     if _agente is None:
         try:
-            _agente = AgenteIA(db=get_db())
+            _agente = AgenteIA(db=get_db(), mongodb=get_mongodb())
         except Exception as e:
             logger.error("No se pudo inicializar AgenteIA: %s", e)
     return _agente
@@ -118,6 +131,7 @@ def health():
         "componentes": {
             "gemini": bool(config.GEMINI_API_KEY),
             "postgres": False,
+            "mongodb": False,
             "nginx_ssh": bool(config.VPS_HOST),
             "mariadb": bool(config.MARIADB_HOST),
         },
@@ -127,6 +141,13 @@ def health():
         estado["componentes"]["postgres"] = db is not None
     except Exception:
         pass
+
+    try:
+        mongo = get_mongodb()
+        estado["componentes"]["mongodb"] = mongo is not None and mongo.activo
+    except Exception:
+        pass
+
     logger.info("Health check solicitado")
     return respuesta_ok({"health": estado})
 
@@ -216,7 +237,7 @@ def preguntas():
     POST /api/preguntas
     Envía una pregunta al agente IA en lenguaje natural.
 
-    Body JSON: { "pregunta": "¿Cuántas conexiones tiene Nginx?" }
+    Body JSON: { "pregunta": "¿Cuántas conexiones tiene Nginx?", "session_id": "mi-sesion-123" }
     """
     agente = get_agente()
     if agente is None:
@@ -224,17 +245,25 @@ def preguntas():
 
     datos = request.get_json(silent=True) or {}
     pregunta = datos.get("pregunta", "").strip()
+    session_id = datos.get("session_id", "default").strip() or "default"
 
     if not pregunta:
         return respuesta_error("El campo 'pregunta' es requerido", 400)
 
     try:
-        respuesta = agente.responder_pregunta(pregunta)
-        # Guardar la interacción en BD
+        respuesta = agente.responder_pregunta(pregunta, session_id=session_id)
+        # Guardar la interacción en BD (PostgreSQL de auditoría/administración)
         db = get_db()
         if db:
-            db.guardar_evento("chat", pregunta, "info", {"respuesta": respuesta})
-        return respuesta_ok({"respuesta": respuesta, "pregunta": pregunta})
+            db.guardar_evento("chat", pregunta, "info", {
+                "respuesta": respuesta,
+                "session_id": session_id,
+            })
+        return respuesta_ok({
+            "respuesta": respuesta,
+            "pregunta": pregunta,
+            "session_id": session_id,
+        })
     except Exception as e:
         logger.error("Error en /api/preguntas: %s", e)
         return respuesta_error(str(e))
