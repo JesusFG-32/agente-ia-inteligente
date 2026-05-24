@@ -12,6 +12,9 @@ const API_BASE = '';          // Mismo origen — Flask sirve el frontend
 const REFRESH_INTERVAL = 30_000; // 30 segundos
 const MAX_CHAT_HISTORY = 50;
 
+const TOKEN_KEY = 'agente_ia_token';
+const USER_KEY = 'agente_ia_user';
+
 // Estado global del dashboard
 const estado = {
   nginx: null,
@@ -19,7 +22,31 @@ const estado = {
   health: null,
   cargando: false,
   intervalId: null,
+  usuario: null,
 };
+
+// ─── Autenticación ─────────────────────────────────────────────
+
+function obtenerToken() {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+function obtenerUsuario() {
+  try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); }
+  catch { return null; }
+}
+
+function cerrarSesion() {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+  window.location.href = '/login';
+}
+
+/** Comprueba si el usuario tiene un permiso concreto (según su rol). */
+function tienePermiso(permiso) {
+  const u = estado.usuario;
+  return !!(u && Array.isArray(u.permisos) && u.permisos.includes(permiso));
+}
 
 // ─── Utilidades DOM ─────────────────────────────────────────────
 
@@ -66,10 +93,22 @@ function mostrarToast(mensaje, tipo = 'info', duracion = 4000) {
 
 async function apiFetch(url, opciones = {}) {
   try {
-    const res = await fetch(API_BASE + url, {
-      headers: { 'Content-Type': 'application/json' },
-      ...opciones,
-    });
+    const token = obtenerToken();
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(opciones.headers ?? {}),
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch(API_BASE + url, { ...opciones, headers });
+
+    // Sesión expirada o inválida → redirigir al login
+    if (res.status === 401) {
+      mostrarToast('Sesión expirada — vuelve a iniciar sesión', 'warning');
+      setTimeout(cerrarSesion, 800);
+      throw new Error('No autenticado');
+    }
+
     const data = await res.json();
     if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
     return data;
@@ -93,10 +132,10 @@ function formatFecha(isoString) {
 
 function formatSeveridad(sev) {
   const mapa = {
-    info:    { clase: 'blue',   label: 'INFO' },
+    info: { clase: 'blue', label: 'INFO' },
     warning: { clase: 'yellow', label: 'WARN' },
-    error:   { clase: 'red',    label: 'ERROR' },
-    critico: { clase: 'red',    label: 'CRÍTICO' },
+    error: { clase: 'red', label: 'ERROR' },
+    critico: { clase: 'red', label: 'CRÍTICO' },
   };
   return mapa[sev] ?? { clase: 'blue', label: sev?.toUpperCase() ?? 'INFO' };
 }
@@ -116,11 +155,11 @@ async function actualizarHealth() {
 
     // Indicadores de componentes
     const { componentes } = data.health;
-    actualizarIndicador('ind-gemini',   componentes.gemini,      'Gemini');
-    actualizarIndicador('ind-postgres', componentes.postgres,    'PostgreSQL');
-    actualizarIndicador('ind-mongodb',  componentes.mongodb,     'MongoDB');
-    actualizarIndicador('ind-nginx',    componentes.nginx_ssh,   'Nginx SSH');
-    actualizarIndicador('ind-mariadb',  componentes.mariadb,     'MariaDB');
+    actualizarIndicador('ind-gemini', componentes.gemini, 'Gemini');
+    actualizarIndicador('ind-postgres', componentes.postgres, 'PostgreSQL');
+    actualizarIndicador('ind-mongodb', componentes.mongodb, 'MongoDB');
+    actualizarIndicador('ind-nginx', componentes.nginx_ssh, 'Nginx SSH');
+    actualizarIndicador('ind-mariadb', componentes.mariadb, 'MariaDB');
 
   } catch (err) {
     const badge = $('status-badge');
@@ -164,8 +203,8 @@ async function actualizarMetricasNginx() {
       if (cont) {
         cont.innerHTML = errores.length
           ? errores.slice(-5).map(l =>
-              `<div class="text-sm mono text-muted" style="margin-bottom:4px;word-break:break-all">${escapeHtml(l)}</div>`
-            ).join('')
+            `<div class="text-sm mono text-muted" style="margin-bottom:4px;word-break:break-all">${escapeHtml(l)}</div>`
+          ).join('')
           : '<div class="empty-state text-sm">Sin errores recientes 🎉</div>';
       }
     } else {
@@ -190,9 +229,9 @@ async function actualizarMetricasMariaDB() {
       setText('mariadb-conexiones', conexiones);
 
       const estado_gral = m.estado_general ?? {};
-      setText('mariadb-queries',   estado_gral.Questions ?? '—');
-      setText('mariadb-lentas',    estado_gral.Slow_queries ?? '0');
-      setText('mariadb-uptime',    formatUptime(estado_gral.Uptime));
+      setText('mariadb-queries', estado_gral.Questions ?? '—');
+      setText('mariadb-lentas', estado_gral.Slow_queries ?? '0');
+      setText('mariadb-uptime', formatUptime(estado_gral.Uptime));
 
       const badgeEl = $('mariadb-badge');
       if (badgeEl) {
@@ -206,7 +245,7 @@ async function actualizarMetricasMariaDB() {
       if (cont) {
         cont.innerHTML = lentas.length
           ? lentas.map(q =>
-              `<div class="event-item">
+            `<div class="event-item">
                 <span class="event-dot warning"></span>
                 <div class="event-body">
                   <div class="event-desc">${escapeHtml(q.Info ?? 'Query sin info')}</div>
@@ -214,7 +253,7 @@ async function actualizarMetricasMariaDB() {
                 </div>
                 <button class="btn btn-danger btn-sm" onclick="matarQuery(${q.Id})">Kill</button>
               </div>`
-            ).join('')
+          ).join('')
           : '<div class="empty-state text-sm">Sin queries lentas ✓</div>';
       }
     } else {
@@ -272,7 +311,7 @@ async function analizarAnomalias() {
   try {
     // Construir payload con métricas actuales
     const payload = {};
-    if (estado.nginx)   payload.nginx   = estado.nginx;
+    if (estado.nginx) payload.nginx = estado.nginx;
     if (estado.mariadb) payload.mariadb = estado.mariadb;
 
     const data = await apiFetch('/api/analizar', {
@@ -494,79 +533,140 @@ function escapeHtml(str) {
 
 // ─── Event listeners ──────────────────────────────────────────────
 
-document.addEventListener('DOMContentLoaded', () => {
-  // Inicializar sesión de chat si no existe
-  if (!localStorage.getItem('chat_session_id')) {
-    localStorage.setItem('chat_session_id', 'sess_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36));
+async function inicializarSesion() {
+  // Sin token → al login
+  const token = obtenerToken();
+  if (!token) {
+    window.location.href = '/login';
+    return false;
   }
 
-  // Botones de header/acciones
-  const btnAnalizar = $('btn-analizar');
-  if (btnAnalizar) btnAnalizar.addEventListener('click', analizarAnomalias);
+  // Validar token con el backend (también obtiene permisos frescos)
+  try {
+    const data = await apiFetch('/api/auth/me');
+    estado.usuario = data.usuario;
+    localStorage.setItem(USER_KEY, JSON.stringify(data.usuario));
+  } catch {
+    // apiFetch ya redirige en 401; aquí sólo cortamos
+    return false;
+  }
 
-  const btnReiniciar = $('btn-reiniciar-nginx');
-  if (btnReiniciar) btnReiniciar.addEventListener('click', reiniciarNginx);
+  // Pintar info del usuario en el header
+  const userInfo = $('user-info');
+  if (userInfo) {
+    const u = estado.usuario;
+    userInfo.className = `pill ${u.rol === 'admin' ? 'red' : u.rol === 'operator' ? 'yellow' : 'green'}`;
+    userInfo.textContent = `👤 ${u.username} · ${u.rol.toUpperCase()}`;
+    userInfo.title = `${u.email} · ${u.permisos.length} permisos`;
+  }
 
-  const btnOptimizar = $('btn-optimizar-bd');
-  if (btnOptimizar) btnOptimizar.addEventListener('click', optimizarBD);
+  // Mostrar link al panel admin solo si tiene permiso
+  const linkAdmin = $('link-admin');
+  if (linkAdmin) linkAdmin.style.display = tienePermiso('manage_users') ? '' : 'none';
 
-  const btnRefresh = $('btn-refresh');
-  if (btnRefresh) btnRefresh.addEventListener('click', () => {
-    actualizarDashboard();
-    mostrarToast('Actualizando datos...', 'info', 1500);
+  // Deshabilitar botones que el usuario no puede usar (viewer)
+  const matriz = [
+    ['btn-analizar', 'analyze_anomalies'],
+    ['btn-reiniciar-nginx', 'execute_actions'],
+    ['btn-optimizar-bd', 'execute_actions'],
+  ];
+  for (const [btnId, perm] of matriz) {
+    const btn = $(btnId);
+    if (!btn) continue;
+    if (!tienePermiso(perm)) {
+      btn.disabled = true;
+      btn.title = `Tu rol (${estado.usuario.rol}) no tiene el permiso "${perm}"`;
+      btn.classList.add('btn-disabled');
+    }
+  }
+
+  return true;
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  // Bootstrap de sesión antes de cualquier carga
+  const ok = await inicializarSesion();
+  if (!ok) return;
+
+  // Logout
+  const btnLogout = $('btn-logout');
+  if (btnLogout) btnLogout.addEventListener('click', () => {
+    if (confirm('¿Cerrar sesión?')) cerrarSesion();
   });
 
-  // Chat — botón enviar
-  const btnEnviar = $('btn-enviar');
-  if (btnEnviar) btnEnviar.addEventListener('click', enviarPregunta);
+  document.addEventListener('DOMContentLoaded', () => {
+    // Inicializar sesión de chat si no existe
+    if (!localStorage.getItem('chat_session_id')) {
+      localStorage.setItem('chat_session_id', 'sess_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36));
+    }
 
-  // Chat — nuevo chat
-  const btnNuevoChat = $('btn-nuevo-chat');
-  if (btnNuevoChat) {
-    btnNuevoChat.addEventListener('click', () => {
-      const container = $('chat-messages');
-      if (container) container.innerHTML = '';
-      
-      // Generar nuevo ID de sesión
-      const nuevoSessionId = 'sess_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
-      localStorage.setItem('chat_session_id', nuevoSessionId);
-      
-      mostrarToast('Nueva conversación iniciada', 'info', 2000);
-      
-      // Mensaje de bienvenida
-      agregarMensajeChat('agent',
-        '¡Hola! He iniciado una nueva conversación limpia 🤖\n\n' +
-        'Puedo ayudarte con:\n' +
-        '• Estado de Nginx y MariaDB\n' +
-        '• Análisis de anomalías\n' +
-        '• Optimización de bases de datos\n\n' +
-        '¿En qué puedo ayudarte?'
-      );
+    // Botones de header/acciones
+    const btnAnalizar = $('btn-analizar');
+    if (btnAnalizar) btnAnalizar.addEventListener('click', analizarAnomalias);
+
+    const btnReiniciar = $('btn-reiniciar-nginx');
+    if (btnReiniciar) btnReiniciar.addEventListener('click', reiniciarNginx);
+
+    const btnOptimizar = $('btn-optimizar-bd');
+    if (btnOptimizar) btnOptimizar.addEventListener('click', optimizarBD);
+
+    const btnRefresh = $('btn-refresh');
+    if (btnRefresh) btnRefresh.addEventListener('click', () => {
+      actualizarDashboard();
+      mostrarToast('Actualizando datos...', 'info', 1500);
     });
-  }
 
-  // Chat — tecla Enter
-  const chatInput = $('chat-input');
-  if (chatInput) {
-    chatInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        enviarPregunta();
-      }
-    });
-  }
+    // Chat — botón enviar
+    const btnEnviar = $('btn-enviar');
+    if (btnEnviar) btnEnviar.addEventListener('click', enviarPregunta);
 
-  // Iniciar dashboard
-  actualizarDashboard();
-  iniciarAutoRefresh();
+    // Chat — nuevo chat
+    const btnNuevoChat = $('btn-nuevo-chat');
+    if (btnNuevoChat) {
+      btnNuevoChat.addEventListener('click', () => {
+        const container = $('chat-messages');
+        if (container) container.innerHTML = '';
 
-  // Mensaje de bienvenida en el chat
-  agregarMensajeChat('agent',
-    '¡Hola! Soy tu Agente IA de monitoreo 🤖\n\n' +
-    'Puedo ayudarte con:\n' +
-    '• Estado de Nginx y MariaDB\n' +
-    '• Análisis de anomalías\n' +
-    '• Optimización de bases de datos\n\n' +
-    '¿En qué puedo ayudarte?'
-  );
-});
+        // Generar nuevo ID de sesión
+        const nuevoSessionId = 'sess_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+        localStorage.setItem('chat_session_id', nuevoSessionId);
+
+        mostrarToast('Nueva conversación iniciada', 'info', 2000);
+
+        // Mensaje de bienvenida
+        agregarMensajeChat('agent',
+          '¡Hola! He iniciado una nueva conversación limpia 🤖\n\n' +
+          'Puedo ayudarte con:\n' +
+          '• Estado de Nginx y MariaDB\n' +
+          '• Análisis de anomalías\n' +
+          '• Optimización de bases de datos\n\n' +
+          '¿En qué puedo ayudarte?'
+        );
+      });
+    }
+
+    // Chat — tecla Enter
+    const chatInput = $('chat-input');
+    if (chatInput) {
+      chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          enviarPregunta();
+        }
+      });
+    }
+
+    // Iniciar dashboard
+    actualizarDashboard();
+    iniciarAutoRefresh();
+
+    // Mensaje de bienvenida en el chat
+    agregarMensajeChat('agent',
+      '¡Hola! Soy tu Agente IA de monitoreo 🤖\n\n' +
+      'Puedo ayudarte con:\n' +
+      '• Estado de Nginx y MariaDB\n' +
+      '• Análisis de anomalías\n' +
+      '• Optimización de bases de datos\n\n' +
+      '¿En qué puedo ayudarte?'
+    );
+  });

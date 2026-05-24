@@ -57,6 +57,23 @@ MONGO_URI: str = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB_NAME: str = os.getenv("MONGO_DB_NAME", "agente_ia_chats")
 MONGO_COLLECTION_NAME: str = os.getenv("MONGO_COLLECTION_NAME", "conversaciones")
 
+# ─── Autenticación JWT ───────────────────────────────────────
+JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "jwt-dev-secret-change-in-production")
+JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_EXPIRATION_HOURS: int = int(os.getenv("JWT_EXPIRATION_HOURS", "8"))
+
+# UUID v5 namespace — identificador único del proyecto para generar IDs determinísticos.
+# Si lo cambias, los UUIDs generados para los mismos emails cambiarán también.
+UUID_NAMESPACE: str = os.getenv(
+    "UUID_NAMESPACE",
+    "a7c8e9f0-1b2c-5d3e-9f4a-5b6c7d8e9f0a",
+)
+
+# Credenciales del primer admin (usadas por seed_admin.py)
+ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "admin@agente-ia.local")
+ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "")
+
 # ─── Validación de configuración crítica ─────────────────────
 def validar_config() -> list[str]:
     """
@@ -74,6 +91,10 @@ def validar_config() -> list[str]:
         advertencias.append("⚠️  SECRET_KEY por defecto — cambia en producción")
     if not MONGO_URI:
         advertencias.append("⚠️  MONGO_URI no configurado (MongoDB deshabilitado, se usará memoria)")
+    if JWT_SECRET_KEY == "jwt-dev-secret-change-in-production":
+        advertencias.append("⚠️  JWT_SECRET_KEY por defecto — cambia en producción")
+    if not ADMIN_PASSWORD:
+        advertencias.append("ℹ️  ADMIN_PASSWORD no configurada — necesaria para seed_admin.py")
     return advertencias
 
 

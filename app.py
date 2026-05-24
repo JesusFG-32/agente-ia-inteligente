@@ -8,9 +8,10 @@ Expone endpoints para métricas, análisis IA, chat y control de servicios.
 import logging
 from datetime import datetime
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, g, jsonify, render_template, request
 from flask_cors import CORS
 
+import auth
 import config
 from adaptadores import AdaptadorMariaDB, AdaptadorNginx, BaseDatos, AdaptadorMongoDB
 from agente import AgenteIA
@@ -114,8 +115,241 @@ def respuesta_error(mensaje: str, codigo: int = 500):
 
 @app.route("/")
 def index():
-    """Sirve el dashboard principal."""
+    """Sirve el dashboard principal (la auth se valida en el frontend con el JWT)."""
     return render_template("index.html")
+
+
+@app.route("/login")
+def login_page():
+    """Página de login."""
+    return render_template("login.html")
+
+
+@app.route("/admin/usuarios")
+def admin_usuarios_page():
+    """Panel de administración de usuarios (solo admin valida via JWT en frontend)."""
+    return render_template("admin_usuarios.html")
+
+
+# ─── Autenticación ───────────────────────────────────────────
+
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login():
+    """
+    POST /api/auth/login
+    Body: { "email": "...", "password": "..." }
+    Retorna un JWT si las credenciales son válidas.
+    """
+    datos = request.get_json(silent=True) or {}
+    email = (datos.get("email") or "").strip().lower()
+    password = datos.get("password") or ""
+
+    if not email or not password:
+        return respuesta_error("Email y contraseña son requeridos", 400)
+
+    db = get_db()
+    if db is None:
+        return respuesta_error("Base de datos no disponible", 503)
+
+    usuario = db.obtener_usuario_por_email(email)
+    if usuario is None or not auth.verificar_password(password, usuario["password_hash"]):
+        logger.warning("Login fallido: %s", email)
+        return respuesta_error("Credenciales inválidas", 401)
+
+    if not usuario.get("activo"):
+        return respuesta_error("Cuenta deshabilitada", 403)
+
+    # Convertir UUID a string para JWT
+    usuario["id"] = str(usuario["id"])
+    token = auth.generar_token(usuario)
+    db.registrar_login(usuario["id"])
+    db.guardar_evento("login", f"Login exitoso de {email}", "info", {"usuario_id": usuario["id"]})
+
+    return respuesta_ok({
+        "token": token,
+        "usuario": {
+            "id": usuario["id"],
+            "email": usuario["email"],
+            "username": usuario["username"],
+            "rol": usuario["rol"],
+            "permisos": auth.permisos_del_rol(usuario["rol"]),
+        },
+        "expira_en_horas": config.JWT_EXPIRATION_HOURS,
+    })
+
+
+@app.route("/api/auth/me", methods=["GET"])
+@auth.requiere_auth
+def auth_me():
+    """Retorna la info del usuario autenticado actual."""
+    usuario = g.usuario
+    db = get_db()
+    datos_db = db.obtener_usuario_por_id(usuario["sub"]) if db else None
+    return respuesta_ok({
+        "usuario": {
+            "id": usuario["sub"],
+            "email": usuario["email"],
+            "username": usuario["username"],
+            "rol": usuario["rol"],
+            "permisos": auth.permisos_del_rol(usuario["rol"]),
+            "ultimo_login": datos_db.get("ultimo_login").isoformat() if datos_db and datos_db.get("ultimo_login") else None,
+        },
+    })
+
+
+@app.route("/api/auth/cambiar-password", methods=["POST"])
+@auth.requiere_auth
+def auth_cambiar_password():
+    """
+    POST /api/auth/cambiar-password
+    Body: { "password_actual": "...", "password_nueva": "..." }
+    """
+    datos = request.get_json(silent=True) or {}
+    actual = datos.get("password_actual") or ""
+    nueva = datos.get("password_nueva") or ""
+
+    if len(nueva) < 6:
+        return respuesta_error("La nueva contraseña debe tener al menos 6 caracteres", 400)
+
+    db = get_db()
+    if db is None:
+        return respuesta_error("Base de datos no disponible", 503)
+
+    usuario_id = g.usuario["sub"]
+    usuario = db.obtener_usuario_por_email(g.usuario["email"])
+    if not usuario or not auth.verificar_password(actual, usuario["password_hash"]):
+        return respuesta_error("Contraseña actual incorrecta", 401)
+
+    nuevo_hash = auth.hash_password(nueva)
+    if not db.cambiar_password(usuario_id, nuevo_hash):
+        return respuesta_error("No se pudo actualizar la contraseña", 500)
+    return respuesta_ok({"mensaje": "Contraseña actualizada"})
+
+
+# ─── Gestión de usuarios (solo admin) ────────────────────────
+
+@app.route("/api/usuarios", methods=["GET"])
+@auth.requiere_auth
+@auth.requiere_permiso("manage_users")
+def listar_usuarios():
+    """Lista todos los usuarios (admin)."""
+    db = get_db()
+    if db is None:
+        return respuesta_error("Base de datos no disponible", 503)
+    usuarios = db.listar_usuarios()
+    # Convertir UUIDs y timestamps a string
+    for u in usuarios:
+        u["id"] = str(u["id"])
+        for campo in ("ultimo_login", "creado_en", "actualizado_en"):
+            if u.get(campo):
+                u[campo] = u[campo].isoformat()
+    return respuesta_ok({"usuarios": usuarios, "total": len(usuarios)})
+
+
+@app.route("/api/usuarios", methods=["POST"])
+@auth.requiere_auth
+@auth.requiere_permiso("manage_users")
+def crear_usuario():
+    """
+    POST /api/usuarios
+    Body: { "email": "...", "username": "...", "password": "...", "rol": "viewer" }
+    """
+    datos = request.get_json(silent=True) or {}
+    email = (datos.get("email") or "").strip().lower()
+    username = (datos.get("username") or "").strip()
+    password = datos.get("password") or ""
+    rol = datos.get("rol") or "viewer"
+
+    if not email or not username or not password:
+        return respuesta_error("email, username y password son requeridos", 400)
+    if rol not in auth.ROLES_VALIDOS:
+        return respuesta_error(f"Rol inválido. Válidos: {auth.ROLES_VALIDOS}", 400)
+    if len(password) < 6:
+        return respuesta_error("La contraseña debe tener al menos 6 caracteres", 400)
+
+    db = get_db()
+    if db is None:
+        return respuesta_error("Base de datos no disponible", 503)
+
+    try:
+        usuario_id = auth.generar_uuid_v5(email)
+        password_hash = auth.hash_password(password)
+    except ValueError as e:
+        return respuesta_error(str(e), 400)
+
+    nuevo = db.crear_usuario(usuario_id, email, username, password_hash, rol, True)
+    if nuevo is None:
+        return respuesta_error("No se pudo crear el usuario (¿email o username duplicado?)", 409)
+
+    nuevo["id"] = str(nuevo["id"])
+    if nuevo.get("creado_en"):
+        nuevo["creado_en"] = nuevo["creado_en"].isoformat()
+    return respuesta_ok({"usuario": nuevo}, 201)
+
+
+@app.route("/api/usuarios/<usuario_id>", methods=["PUT"])
+@auth.requiere_auth
+@auth.requiere_permiso("manage_users")
+def actualizar_usuario(usuario_id: str):
+    """
+    PUT /api/usuarios/<uuid>
+    Body: { "username"?: "...", "rol"?: "...", "activo"?: bool }
+    """
+    datos = request.get_json(silent=True) or {}
+    rol = datos.get("rol")
+    if rol is not None and rol not in auth.ROLES_VALIDOS:
+        return respuesta_error(f"Rol inválido. Válidos: {auth.ROLES_VALIDOS}", 400)
+
+    # Prevenir que un admin se quite el rol o se deshabilite a sí mismo
+    if usuario_id == g.usuario["sub"]:
+        if rol is not None and rol != "admin":
+            return respuesta_error("No puedes cambiar tu propio rol", 400)
+        if datos.get("activo") is False:
+            return respuesta_error("No puedes desactivarte a ti mismo", 400)
+
+    db = get_db()
+    if db is None:
+        return respuesta_error("Base de datos no disponible", 503)
+
+    actualizado = db.actualizar_usuario(
+        usuario_id,
+        username=datos.get("username"),
+        rol=rol,
+        activo=datos.get("activo"),
+    )
+    if actualizado is None:
+        return respuesta_error("Usuario no encontrado o conflicto al actualizar", 404)
+
+    actualizado["id"] = str(actualizado["id"])
+    for campo in ("ultimo_login", "creado_en", "actualizado_en"):
+        if actualizado.get(campo):
+            actualizado[campo] = actualizado[campo].isoformat()
+    return respuesta_ok({"usuario": actualizado})
+
+
+@app.route("/api/usuarios/<usuario_id>", methods=["DELETE"])
+@auth.requiere_auth
+@auth.requiere_permiso("manage_users")
+def eliminar_usuario(usuario_id: str):
+    """Elimina un usuario. Un admin no puede eliminarse a sí mismo."""
+    if usuario_id == g.usuario["sub"]:
+        return respuesta_error("No puedes eliminarte a ti mismo", 400)
+    db = get_db()
+    if db is None:
+        return respuesta_error("Base de datos no disponible", 503)
+    if not db.eliminar_usuario(usuario_id):
+        return respuesta_error("Usuario no encontrado", 404)
+    return respuesta_ok({"mensaje": "Usuario eliminado", "id": usuario_id})
+
+
+@app.route("/api/auth/roles", methods=["GET"])
+@auth.requiere_auth
+def listar_roles():
+    """Retorna los roles disponibles y sus permisos (útil para el panel admin)."""
+    return respuesta_ok({
+        "roles": {rol: sorted(perms) for rol, perms in auth.ROLES.items()},
+        "permisos": auth.PERMISOS,
+    })
 
 
 @app.route("/api/health", methods=["GET"])
@@ -153,6 +387,8 @@ def health():
 
 
 @app.route("/api/metricas/nginx", methods=["GET"])
+@auth.requiere_auth
+@auth.requiere_permiso("read_metrics")
 def metricas_nginx():
     """
     GET /api/metricas/nginx
@@ -175,6 +411,8 @@ def metricas_nginx():
 
 
 @app.route("/api/metricas/mariadb", methods=["GET"])
+@auth.requiere_auth
+@auth.requiere_permiso("read_metrics")
 def metricas_mariadb():
     """
     GET /api/metricas/mariadb
@@ -196,6 +434,8 @@ def metricas_mariadb():
 
 
 @app.route("/api/analizar", methods=["POST"])
+@auth.requiere_auth
+@auth.requiere_permiso("analyze_anomalies")
 def analizar():
     """
     POST /api/analizar
@@ -232,6 +472,8 @@ def analizar():
 
 
 @app.route("/api/preguntas", methods=["POST"])
+@auth.requiere_auth
+@auth.requiere_permiso("use_ai_chat")
 def preguntas():
     """
     POST /api/preguntas
@@ -270,6 +512,8 @@ def preguntas():
 
 
 @app.route("/api/eventos", methods=["GET"])
+@auth.requiere_auth
+@auth.requiere_permiso("read_events")
 def eventos():
     """
     GET /api/eventos?limite=50
@@ -288,6 +532,8 @@ def eventos():
 
 
 @app.route("/api/acciones", methods=["GET"])
+@auth.requiere_auth
+@auth.requiere_permiso("read_actions")
 def acciones():
     """
     GET /api/acciones
@@ -305,6 +551,8 @@ def acciones():
 
 
 @app.route("/api/ejecutar-accion", methods=["POST"])
+@auth.requiere_auth
+@auth.requiere_permiso("execute_actions")
 def ejecutar_accion():
     """
     POST /api/ejecutar-accion
@@ -348,12 +596,13 @@ def ejecutar_accion():
         else:
             return respuesta_error(f"Acción desconocida: '{accion}'", 400)
 
-        # Registrar la acción en BD
+        # Registrar la acción en BD (con auditoría del usuario)
         if db:
+            usuario_actual = g.usuario
             db.guardar_accion(
                 tipo=accion,
-                descripcion=f"Acción ejecutada: {accion}",
-                parametros=parametros,
+                descripcion=f"Acción ejecutada: {accion} por {usuario_actual['email']}",
+                parametros={**parametros, "usuario_id": usuario_actual["sub"]},
                 resultado=resultado,
                 automatica=False,
             )

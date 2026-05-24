@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Administración de Usuarios — Agente IA</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <header class="header">
+    <div class="header-brand">
+      <div class="header-icon">👥</div>
+      <div>
+        <div class="header-title">Gestión de Usuarios</div>
+        <div class="header-subtitle">Roles · Permisos · UUID v5</div>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <span id="user-info" class="pill blue">Cargando...</span>
+      <a href="/" class="btn btn-ghost btn-sm">← Dashboard</a>
+      <button id="btn-logout" class="btn btn-danger btn-sm">Cerrar sesión</button>
+    </div>
+  </header>
+
+  <main class="main-container">
+
+    <!-- ─── Crear usuario ───────────────────────── -->
+    <p class="section-title">Crear nuevo usuario</p>
+    <div class="card form-card">
+      <form id="form-crear-usuario" class="form-grid">
+        <label class="auth-label">
+          Email
+          <input id="nu-email" type="email" class="auth-input" placeholder="usuario@dominio.com" required />
+        </label>
+        <label class="auth-label">
+          Username
+          <input id="nu-username" type="text" class="auth-input" placeholder="nombre_usuario" required minlength="3" />
+        </label>
+        <label class="auth-label">
+          Contraseña
+          <input id="nu-password" type="password" class="auth-input" placeholder="mínimo 6 caracteres" required minlength="6" />
+        </label>
+        <label class="auth-label">
+          Rol
+          <select id="nu-rol" class="auth-input">
+            <option value="viewer">Viewer — Solo lectura + chat IA</option>
+            <option value="operator">Operator — Lectura + ejecutar acciones</option>
+            <option value="admin">Admin — Control total</option>
+          </select>
+        </label>
+        <div class="form-submit-row">
+          <button type="submit" class="btn btn-primary">
+            <span class="spinner"></span>
+            <span class="btn-text">➕ Crear usuario</span>
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <!-- ─── Matriz de permisos ──────────────────── -->
+    <p class="section-title">Matriz de permisos por rol</p>
+    <div class="card">
+      <div id="permisos-matrix" class="permisos-matrix">
+        <div class="empty-state text-sm">Cargando permisos...</div>
+      </div>
+    </div>
+
+    <!-- ─── Lista de usuarios ───────────────────── -->
+    <p class="section-title">Usuarios registrados</p>
+    <div class="card">
+      <div class="table-wrap">
+        <table class="users-table">
+          <thead>
+            <tr>
+              <th>UUID v5</th>
+              <th>Email</th>
+              <th>Username</th>
+              <th>Rol</th>
+              <th>Estado</th>
+              <th>Último login</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="users-tbody">
+            <tr><td colspan="7" class="empty-state">Cargando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <footer style="text-align:center;padding:2rem 0;color:var(--text-muted);font-size:0.8rem;border-top:1px solid var(--border);margin-top:1rem">
+      Agente IA Inteligente · Panel de Administración
+    </footer>
+  </main>
+
+  <script src="{{ url_for('static', filename='js/admin_usuarios.js') }}"></script>
+</body>
+</html>

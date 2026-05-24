@@ -128,6 +128,20 @@ class BaseDatos:
             creado_en   TIMESTAMP DEFAULT NOW(),
             actualizado_en TIMESTAMP DEFAULT NOW()
         );
+
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id              UUID PRIMARY KEY,
+            email           VARCHAR(255) UNIQUE NOT NULL,
+            username        VARCHAR(80)  UNIQUE NOT NULL,
+            password_hash   VARCHAR(255) NOT NULL,
+            rol             VARCHAR(20)  NOT NULL DEFAULT 'viewer',
+            activo          BOOLEAN      NOT NULL DEFAULT TRUE,
+            ultimo_login    TIMESTAMP,
+            creado_en       TIMESTAMP    DEFAULT NOW(),
+            actualizado_en  TIMESTAMP    DEFAULT NOW(),
+            CONSTRAINT rol_valido CHECK (rol IN ('admin', 'operator', 'viewer'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios (email);
         """
         try:
             with self._cursor() as cur:
@@ -352,6 +366,188 @@ class BaseDatos:
         except psycopg2.Error as e:
             logger.error("Error guardando patrón: %s", e)
             return -1
+
+    # ─── Usuarios y autenticación ─────────────────────────────
+
+    def crear_usuario(
+        self,
+        usuario_id: str,
+        email: str,
+        username: str,
+        password_hash: str,
+        rol: str = "viewer",
+        activo: bool = True,
+    ) -> Optional[dict]:
+        """
+        Inserta un nuevo usuario.
+
+        Args:
+            usuario_id: UUID v5 generado a partir del email.
+            email: Email único del usuario.
+            username: Nombre de usuario único.
+            password_hash: Hash bcrypt de la contraseña.
+            rol: 'admin' | 'operator' | 'viewer'.
+            activo: True si la cuenta está habilitada.
+
+        Returns:
+            dict con el usuario creado, o None si falló (e.g. email duplicado).
+        """
+        sql = """
+            INSERT INTO usuarios (id, email, username, password_hash, rol, activo)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id, email, username, rol, activo, creado_en
+        """
+        try:
+            with self._cursor() as cur:
+                cur.execute(sql, (
+                    usuario_id, email.strip().lower(), username.strip(),
+                    password_hash, rol, activo,
+                ))
+                fila = cur.fetchone()
+                logger.info("Usuario creado [%s] rol=%s", email, rol)
+                return dict(fila) if fila else None
+        except psycopg2.errors.UniqueViolation:
+            logger.warning("Usuario duplicado: %s / %s", email, username)
+            return None
+        except psycopg2.Error as e:
+            logger.error("Error creando usuario: %s", e)
+            return None
+
+    def obtener_usuario_por_email(self, email: str) -> Optional[dict]:
+        """Busca un usuario por email (case-insensitive). Incluye password_hash."""
+        sql = """
+            SELECT id, email, username, password_hash, rol, activo,
+                   ultimo_login, creado_en, actualizado_en
+            FROM usuarios
+            WHERE email = %s
+        """
+        try:
+            with self._cursor() as cur:
+                cur.execute(sql, (email.strip().lower(),))
+                fila = cur.fetchone()
+                return dict(fila) if fila else None
+        except psycopg2.Error as e:
+            logger.error("Error buscando usuario por email: %s", e)
+            return None
+
+    def obtener_usuario_por_id(self, usuario_id: str) -> Optional[dict]:
+        """Busca un usuario por su UUID. NO devuelve password_hash."""
+        sql = """
+            SELECT id, email, username, rol, activo,
+                   ultimo_login, creado_en, actualizado_en
+            FROM usuarios
+            WHERE id = %s
+        """
+        try:
+            with self._cursor() as cur:
+                cur.execute(sql, (usuario_id,))
+                fila = cur.fetchone()
+                return dict(fila) if fila else None
+        except psycopg2.Error as e:
+            logger.error("Error buscando usuario por id: %s", e)
+            return None
+
+    def listar_usuarios(self) -> list[dict]:
+        """Lista todos los usuarios (sin password_hash)."""
+        sql = """
+            SELECT id, email, username, rol, activo,
+                   ultimo_login, creado_en, actualizado_en
+            FROM usuarios
+            ORDER BY creado_en DESC
+        """
+        try:
+            with self._cursor() as cur:
+                cur.execute(sql)
+                return [dict(f) for f in cur.fetchall()]
+        except psycopg2.Error as e:
+            logger.error("Error listando usuarios: %s", e)
+            return []
+
+    def actualizar_usuario(
+        self,
+        usuario_id: str,
+        username: Optional[str] = None,
+        rol: Optional[str] = None,
+        activo: Optional[bool] = None,
+    ) -> Optional[dict]:
+        """
+        Actualiza campos editables de un usuario (no email — define el UUID v5).
+
+        Returns:
+            Usuario actualizado, o None si no existe / falló.
+        """
+        campos = []
+        valores: list = []
+        if username is not None:
+            campos.append("username = %s"); valores.append(username.strip())
+        if rol is not None:
+            campos.append("rol = %s"); valores.append(rol)
+        if activo is not None:
+            campos.append("activo = %s"); valores.append(activo)
+        if not campos:
+            return self.obtener_usuario_por_id(usuario_id)
+
+        campos.append("actualizado_en = NOW()")
+        valores.append(usuario_id)
+
+        sql = f"""
+            UPDATE usuarios SET {', '.join(campos)}
+            WHERE id = %s
+            RETURNING id, email, username, rol, activo, ultimo_login, creado_en, actualizado_en
+        """
+        try:
+            with self._cursor() as cur:
+                cur.execute(sql, tuple(valores))
+                fila = cur.fetchone()
+                if fila:
+                    logger.info("Usuario actualizado [%s]", usuario_id)
+                return dict(fila) if fila else None
+        except psycopg2.errors.UniqueViolation:
+            logger.warning("Username duplicado al actualizar: %s", username)
+            return None
+        except psycopg2.Error as e:
+            logger.error("Error actualizando usuario: %s", e)
+            return None
+
+    def cambiar_password(self, usuario_id: str, nuevo_hash: str) -> bool:
+        """Cambia el hash de contraseña de un usuario."""
+        sql = """
+            UPDATE usuarios SET password_hash = %s, actualizado_en = NOW()
+            WHERE id = %s
+        """
+        try:
+            with self._cursor() as cur:
+                cur.execute(sql, (nuevo_hash, usuario_id))
+                actualizados = cur.rowcount
+                if actualizados:
+                    logger.info("Password cambiada para usuario [%s]", usuario_id)
+                return actualizados > 0
+        except psycopg2.Error as e:
+            logger.error("Error cambiando password: %s", e)
+            return False
+
+    def registrar_login(self, usuario_id: str) -> None:
+        """Marca la fecha del último login exitoso."""
+        sql = "UPDATE usuarios SET ultimo_login = NOW() WHERE id = %s"
+        try:
+            with self._cursor() as cur:
+                cur.execute(sql, (usuario_id,))
+        except psycopg2.Error as e:
+            logger.error("Error registrando login: %s", e)
+
+    def eliminar_usuario(self, usuario_id: str) -> bool:
+        """Elimina un usuario por UUID."""
+        sql = "DELETE FROM usuarios WHERE id = %s"
+        try:
+            with self._cursor() as cur:
+                cur.execute(sql, (usuario_id,))
+                eliminados = cur.rowcount
+                if eliminados:
+                    logger.info("Usuario eliminado [%s]", usuario_id)
+                return eliminados > 0
+        except psycopg2.Error as e:
+            logger.error("Error eliminando usuario: %s", e)
+            return False
 
     # ─── Desconexión ──────────────────────────────────────────
 
