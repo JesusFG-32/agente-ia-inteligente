@@ -31,12 +31,12 @@ logger = logging.getLogger("agente-ia.auth")
 # Catálogo de permisos disponibles. Cada endpoint protegido referencia uno.
 PERMISOS = {
     "view_dashboard":    "Acceder al dashboard web",
-    "read_metrics":      "Leer métricas de Nginx y MariaDB",
+    "read_metrics":      "Leer métricas de Nginx, MariaDB, Docker y Sistema",
     "read_events":       "Leer historial de eventos",
     "read_actions":      "Leer historial de acciones",
     "use_ai_chat":       "Chatear con el agente IA",
     "analyze_anomalies": "Solicitar análisis de anomalías a la IA",
-    "execute_actions":   "Ejecutar acciones de control (reiniciar, optimizar, kill)",
+    "execute_actions":   "Ejecutar acciones de control (servicios, logs, Docker)",
     "manage_users":      "CRUD de usuarios y roles",
 }
 
