@@ -121,7 +121,7 @@ class BaseDatos:
 
         CREATE TABLE IF NOT EXISTS patrones (
             id          SERIAL PRIMARY KEY,
-            nombre      VARCHAR(200) NOT NULL,
+            nombre      VARCHAR(200) UNIQUE NOT NULL,
             descripcion TEXT,
             datos       JSONB,
             ocurrencias INTEGER DEFAULT 1,
@@ -141,14 +141,46 @@ class BaseDatos:
             actualizado_en  TIMESTAMP    DEFAULT NOW(),
             CONSTRAINT rol_valido CHECK (rol IN ('admin', 'operator', 'viewer'))
         );
+
+        CREATE TABLE IF NOT EXISTS configuraciones (
+            clave           VARCHAR(100) PRIMARY KEY,
+            valor           TEXT NOT NULL,
+            descripcion     TEXT,
+            actualizado_en  TIMESTAMP DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS reportes (
+            id              SERIAL PRIMARY KEY,
+            titulo          VARCHAR(255) NOT NULL,
+            tipo            VARCHAR(50) DEFAULT 'diario',
+            contenido       TEXT NOT NULL,
+            datos           JSONB,
+            creado_por      UUID REFERENCES usuarios(id) ON DELETE SET NULL,
+            creado_en       TIMESTAMP DEFAULT NOW()
+        );
+
         CREATE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios (email);
+        CREATE INDEX IF NOT EXISTS idx_eventos_creado ON eventos (creado_en);
+        CREATE INDEX IF NOT EXISTS idx_acciones_creado ON acciones (creado_en);
+        CREATE INDEX IF NOT EXISTS idx_metricas_creado ON metricas (creado_en);
+        CREATE INDEX IF NOT EXISTS idx_metricas_busqueda ON metricas (origen, nombre);
+        CREATE INDEX IF NOT EXISTS idx_reportes_creado ON reportes (creado_en);
         """
         try:
             with self._cursor() as cur:
                 cur.execute(ddl)
-            logger.info("Tablas verificadas/creadas correctamente")
+            logger.info("Tablas e índices verificados/creados correctamente")
+            
+            # Migración dinámica: si la tabla 'patrones' existía sin UNIQUE, intentar aplicar el ALTER TABLE
+            try:
+                with self._cursor() as cur:
+                    cur.execute("ALTER TABLE patrones ADD CONSTRAINT uq_patrones_nombre UNIQUE (nombre);")
+                    logger.info("Restricción UNIQUE añadida exitosamente a la tabla 'patrones'")
+            except Exception:
+                # Ya tiene la restricción o ocurrió un error no crítico (ej. duplicados previos que el usuario debe limpiar)
+                pass
         except psycopg2.Error as e:
-            logger.error("Error creando tablas: %s", e)
+            logger.error("Error creando tablas/índices: %s", e)
             raise
 
     # ─── Guardar datos ────────────────────────────────────────
@@ -339,32 +371,29 @@ class BaseDatos:
 
     def guardar_patron(self, nombre: str, descripcion: str, datos: dict) -> int:
         """
-        Guarda o actualiza un patrón aprendido por el agente.
+        Guarda o actualiza un patrón aprendido por el agente (UPSERT).
 
         Returns:
-            ID del patrón.
+            ID del patrón guardado o actualizado.
         """
-        sql_upsert = """
+        sql = """
             INSERT INTO patrones (nombre, descripcion, datos, ocurrencias)
             VALUES (%s, %s, %s, 1)
             ON CONFLICT (nombre) DO UPDATE
                 SET ocurrencias = patrones.ocurrencias + 1,
+                    descripcion = EXCLUDED.descripcion,
                     datos = EXCLUDED.datos,
                     actualizado_en = NOW()
             RETURNING id
         """
-        # TODO: Agregar restricción UNIQUE en nombre si se necesita ON CONFLICT
-        sql_insert = """
-            INSERT INTO patrones (nombre, descripcion, datos)
-            VALUES (%s, %s, %s)
-            RETURNING id
-        """
         try:
             with self._cursor() as cur:
-                cur.execute(sql_insert, (nombre, descripcion, json.dumps(datos)))
-                return cur.fetchone()["id"]
+                cur.execute(sql, (nombre, descripcion, json.dumps(datos)))
+                patron_id = cur.fetchone()["id"]
+                logger.info("Patrón guardado/actualizado [%s] id=%s", nombre, patron_id)
+                return patron_id
         except psycopg2.Error as e:
-            logger.error("Error guardando patrón: %s", e)
+            logger.error("Error guardando patrón '%s': %s", nombre, e)
             return -1
 
     # ─── Usuarios y autenticación ─────────────────────────────
@@ -548,6 +577,145 @@ class BaseDatos:
         except psycopg2.Error as e:
             logger.error("Error eliminando usuario: %s", e)
             return False
+
+    # ─── Configuración Dinámica ───────────────────────────────
+
+    def guardar_configuracion(
+        self,
+        clave: str,
+        valor: str,
+        descripcion: Optional[str] = None,
+    ) -> bool:
+        """
+        Guarda o actualiza una variable de configuración del agente.
+
+        Args:
+            clave: Identificador único de la configuración.
+            valor: Valor asociado (almacenado como texto).
+            descripcion: Nota descriptiva opcional.
+
+        Returns:
+            True si se guardó correctamente, False de lo contrario.
+        """
+        sql = """
+            INSERT INTO configuraciones (clave, valor, descripcion)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (clave) DO UPDATE
+                SET valor = EXCLUDED.valor,
+                    descripcion = COALESCE(EXCLUDED.descripcion, configuraciones.descripcion),
+                    actualizado_en = NOW()
+        """
+        try:
+            with self._cursor() as cur:
+                cur.execute(sql, (clave.strip(), valor, descripcion))
+                logger.info("Configuración guardada [%s]", clave)
+                return True
+        except psycopg2.Error as e:
+            logger.error("Error guardando configuración [%s]: %s", clave, e)
+            return False
+
+    def obtener_configuracion(self, clave: str) -> Optional[dict]:
+        """Busca una variable de configuración por clave."""
+        sql = "SELECT clave, valor, descripcion, actualizado_en FROM configuraciones WHERE clave = %s"
+        try:
+            with self._cursor() as cur:
+                cur.execute(sql, (clave.strip(),))
+                fila = cur.fetchone()
+                return dict(fila) if fila else None
+        except psycopg2.Error as e:
+            logger.error("Error obteniendo configuración [%s]: %s", clave, e)
+            return None
+
+    def listar_configuraciones(self) -> list[dict]:
+        """Lista todas las variables de configuración dinámicas."""
+        sql = "SELECT clave, valor, descripcion, actualizado_en FROM configuraciones ORDER BY clave ASC"
+        try:
+            with self._cursor() as cur:
+                cur.execute(sql)
+                return [dict(f) for f in cur.fetchall()]
+        except psycopg2.Error as e:
+            logger.error("Error listando configuraciones: %s", e)
+            return []
+
+    # ─── Estadísticas y Reportes Históricos ───────────────────
+
+    def guardar_reporte(
+        self,
+        titulo: str,
+        tipo: str,
+        contenido: str,
+        datos: Optional[dict] = None,
+        creado_por: Optional[str] = None,
+    ) -> int:
+        """
+        Guarda un informe consolidado de rendimiento o incidente.
+
+        Args:
+            titulo: Nombre informativo del reporte.
+            tipo: 'diario' | 'semanal' | 'mensual' | 'incidente'.
+            contenido: Texto completo en formato Markdown o texto legible.
+            datos: Datos brutos JSON complementarios.
+            creado_por: UUID del usuario que lo generó (puede ser None si es automático).
+
+        Returns:
+            ID del reporte insertado, o -1 si falló.
+        """
+        sql = """
+            INSERT INTO reportes (titulo, tipo, contenido, datos, creado_por)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+        """
+        try:
+            with self._cursor() as cur:
+                cur.execute(sql, (
+                    titulo.strip(),
+                    tipo.strip().lower(),
+                    contenido,
+                    json.dumps(datos or {}),
+                    creado_por,
+                ))
+                reporte_id = cur.fetchone()["id"]
+                logger.info("Reporte consolidado guardado [%s] id=%s", titulo, reporte_id)
+                return reporte_id
+        except psycopg2.Error as e:
+            logger.error("Error guardando reporte '%s': %s", titulo, e)
+            return -1
+
+    def obtener_reportes(self, limite: int = 20) -> list[dict]:
+        """Obtiene una lista de reportes históricos ordenados por fecha descendente."""
+        sql = """
+            SELECT r.id, r.titulo, r.tipo, r.contenido, r.datos, r.creado_por, r.creado_en, u.username as creador_nombre
+            FROM reportes r
+            LEFT JOIN usuarios u ON r.creado_por = u.id
+            ORDER BY r.creado_en DESC
+            LIMIT %s
+        """
+        try:
+            with self._cursor() as cur:
+                cur.execute(sql, (limite,))
+                filas = cur.fetchall()
+                # Asegurar de convertir UUIDs y timestamps si es necesario
+                return [dict(f) for f in filas]
+        except psycopg2.Error as e:
+            logger.error("Error obteniendo reportes: %s", e)
+            return []
+
+    def obtener_reporte_por_id(self, reporte_id: int) -> Optional[dict]:
+        """Busca un reporte consolidado específico por su ID."""
+        sql = """
+            SELECT r.id, r.titulo, r.tipo, r.contenido, r.datos, r.creado_por, r.creado_en, u.username as creador_nombre
+            FROM reportes r
+            LEFT JOIN usuarios u ON r.creado_por = u.id
+            WHERE r.id = %s
+        """
+        try:
+            with self._cursor() as cur:
+                cur.execute(sql, (reporte_id,))
+                fila = cur.fetchone()
+                return dict(fila) if fila else None
+        except psycopg2.Error as e:
+            logger.error("Error obteniendo reporte %s: %s", reporte_id, e)
+            return None
 
     # ─── Desconexión ──────────────────────────────────────────
 
