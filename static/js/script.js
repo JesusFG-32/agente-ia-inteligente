@@ -12,6 +12,9 @@ const API_BASE = '';          // Mismo origen — Flask sirve el frontend
 const REFRESH_INTERVAL = 30_000; // 30 segundos
 const MAX_CHAT_HISTORY = 50;
 
+const TOKEN_KEY = 'agente_ia_token';
+const USER_KEY  = 'agente_ia_user';
+
 // Estado global del dashboard
 const estado = {
   nginx: null,
@@ -19,7 +22,31 @@ const estado = {
   health: null,
   cargando: false,
   intervalId: null,
+  usuario: null,
 };
+
+// ─── Autenticación ─────────────────────────────────────────────
+
+function obtenerToken() {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+function obtenerUsuario() {
+  try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); }
+  catch { return null; }
+}
+
+function cerrarSesion() {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+  window.location.href = '/login';
+}
+
+/** Comprueba si el usuario tiene un permiso concreto (según su rol). */
+function tienePermiso(permiso) {
+  const u = estado.usuario;
+  return !!(u && Array.isArray(u.permisos) && u.permisos.includes(permiso));
+}
 
 // ─── Utilidades DOM ─────────────────────────────────────────────
 
@@ -66,10 +93,22 @@ function mostrarToast(mensaje, tipo = 'info', duracion = 4000) {
 
 async function apiFetch(url, opciones = {}) {
   try {
-    const res = await fetch(API_BASE + url, {
-      headers: { 'Content-Type': 'application/json' },
-      ...opciones,
-    });
+    const token = obtenerToken();
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(opciones.headers ?? {}),
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch(API_BASE + url, { ...opciones, headers });
+
+    // Sesión expirada o inválida → redirigir al login
+    if (res.status === 401) {
+      mostrarToast('Sesión expirada — vuelve a iniciar sesión', 'warning');
+      setTimeout(cerrarSesion, 800);
+      throw new Error('No autenticado');
+    }
+
     const data = await res.json();
     if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
     return data;
@@ -492,7 +531,67 @@ function escapeHtml(str) {
 
 // ─── Event listeners ──────────────────────────────────────────────
 
-document.addEventListener('DOMContentLoaded', () => {
+async function inicializarSesion() {
+  // Sin token → al login
+  const token = obtenerToken();
+  if (!token) {
+    window.location.href = '/login';
+    return false;
+  }
+
+  // Validar token con el backend (también obtiene permisos frescos)
+  try {
+    const data = await apiFetch('/api/auth/me');
+    estado.usuario = data.usuario;
+    localStorage.setItem(USER_KEY, JSON.stringify(data.usuario));
+  } catch {
+    // apiFetch ya redirige en 401; aquí sólo cortamos
+    return false;
+  }
+
+  // Pintar info del usuario en el header
+  const userInfo = $('user-info');
+  if (userInfo) {
+    const u = estado.usuario;
+    userInfo.className = `pill ${u.rol === 'admin' ? 'red' : u.rol === 'operator' ? 'yellow' : 'green'}`;
+    userInfo.textContent = `👤 ${u.username} · ${u.rol.toUpperCase()}`;
+    userInfo.title = `${u.email} · ${u.permisos.length} permisos`;
+  }
+
+  // Mostrar link al panel admin solo si tiene permiso
+  const linkAdmin = $('link-admin');
+  if (linkAdmin) linkAdmin.style.display = tienePermiso('manage_users') ? '' : 'none';
+
+  // Deshabilitar botones que el usuario no puede usar (viewer)
+  const matriz = [
+    ['btn-analizar',         'analyze_anomalies'],
+    ['btn-reiniciar-nginx',  'execute_actions'],
+    ['btn-optimizar-bd',     'execute_actions'],
+  ];
+  for (const [btnId, perm] of matriz) {
+    const btn = $(btnId);
+    if (!btn) continue;
+    if (!tienePermiso(perm)) {
+      btn.disabled = true;
+      btn.title = `Tu rol (${estado.usuario.rol}) no tiene el permiso "${perm}"`;
+      btn.classList.add('btn-disabled');
+    }
+  }
+
+  return true;
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  // Bootstrap de sesión antes de cualquier carga
+  const ok = await inicializarSesion();
+  if (!ok) return;
+
+  // Logout
+  const btnLogout = $('btn-logout');
+  if (btnLogout) btnLogout.addEventListener('click', () => {
+    if (confirm('¿Cerrar sesión?')) cerrarSesion();
+  });
+
   // Botones de header/acciones
   const btnAnalizar = $('btn-analizar');
   if (btnAnalizar) btnAnalizar.addEventListener('click', analizarAnomalias);

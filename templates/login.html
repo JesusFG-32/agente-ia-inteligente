@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Iniciar sesión — Agente IA</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body class="auth-body">
+
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <main class="auth-shell">
+    <div class="auth-card">
+      <div class="auth-header">
+        <div class="auth-icon">🤖</div>
+        <h1 class="auth-title">Agente IA Inteligente</h1>
+        <p class="auth-subtitle">Inicia sesión para continuar</p>
+      </div>
+
+      <form id="login-form" class="auth-form" autocomplete="on">
+        <label class="auth-label" for="email">
+          Email
+          <input
+            id="email"
+            name="email"
+            type="email"
+            class="auth-input"
+            placeholder="admin@agente-ia.local"
+            autocomplete="username"
+            required
+          />
+        </label>
+
+        <label class="auth-label" for="password">
+          Contraseña
+          <input
+            id="password"
+            name="password"
+            type="password"
+            class="auth-input"
+            placeholder="••••••••"
+            autocomplete="current-password"
+            required
+            minlength="6"
+          />
+        </label>
+
+        <div id="login-error" class="auth-error" role="alert"></div>
+
+        <button id="btn-login" type="submit" class="btn btn-primary auth-submit">
+          <span class="spinner"></span>
+          <span class="btn-text">Iniciar sesión</span>
+        </button>
+      </form>
+
+      <p class="auth-footer">
+        Acceso restringido — contacta a tu administrador si no tienes cuenta.
+      </p>
+    </div>
+  </main>
+
+  <script src="{{ url_for('static', filename='js/login.js') }}"></script>
+</body>
+</html>
