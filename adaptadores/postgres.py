@@ -60,7 +60,7 @@ class BaseDatos:
     # ─── Conexión ─────────────────────────────────────────────
 
     def _conectar(self) -> None:
-        """Establece la conexión con PostgreSQL."""
+        """Establece la conexión con PostgreSQL, creando la base de datos si no existe."""
         try:
             self._conexion = psycopg2.connect(
                 host=self.host,
@@ -72,6 +72,45 @@ class BaseDatos:
             )
             self._conexion.autocommit = True
             logger.info("Conectado a PostgreSQL '%s' en %s:%s", self.database, self.host, self.port)
+        except psycopg2.OperationalError as e:
+            msg = str(e).lower()
+            if "does not exist" in msg or "no existe" in msg or "database" in msg:
+                logger.warning("La base de datos '%s' no existe. Intentando crearla automáticamente...", self.database)
+                try:
+                    # Conectar a la base de datos por defecto 'postgres'
+                    temp_conn = psycopg2.connect(
+                        host=self.host,
+                        port=self.port,
+                        dbname="postgres",
+                        user=self.user,
+                        password=self.password,
+                        connect_timeout=10,
+                    )
+                    temp_conn.autocommit = True
+                    with temp_conn.cursor() as cur:
+                        from psycopg2.extensions import quote_ident
+                        safe_db_name = quote_ident(self.database, temp_conn)
+                        cur.execute(f"CREATE DATABASE {safe_db_name};")
+                    temp_conn.close()
+                    logger.info("Base de datos '%s' creada de forma automática con éxito.", self.database)
+                    
+                    # Reintentar conexión a la base de datos recién creada
+                    self._conexion = psycopg2.connect(
+                        host=self.host,
+                        port=self.port,
+                        dbname=self.database,
+                        user=self.user,
+                        password=self.password,
+                        connect_timeout=10,
+                    )
+                    self._conexion.autocommit = True
+                    logger.info("Conectado a PostgreSQL '%s' en %s:%s", self.database, self.host, self.port)
+                    return
+                except Exception as ex_create:
+                    logger.error("No se pudo crear automáticamente la base de datos: %s", ex_create)
+            
+            logger.error("Error conectando a PostgreSQL: %s", e)
+            raise
         except psycopg2.Error as e:
             logger.error("Error conectando a PostgreSQL: %s", e)
             raise
