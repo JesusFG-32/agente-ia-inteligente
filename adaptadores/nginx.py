@@ -101,7 +101,17 @@ class AdaptadorNginx:
             self._conectar()
 
         try:
-            _, stdout, stderr = self._cliente.exec_command(cmd, timeout=self.timeout)
+            # Inyectar el flag -S para que sudo lea la contraseña desde stdin
+            if "sudo " in cmd and "sudo -S" not in cmd:
+                cmd = cmd.replace("sudo ", "sudo -S ")
+
+            stdin, stdout, stderr = self._cliente.exec_command(cmd, timeout=self.timeout)
+            
+            # Escribir la contraseña si el comando contiene sudo -S
+            if "sudo -S " in cmd and self.password:
+                stdin.write(self.password + "\n")
+                stdin.flush()
+
             salida = stdout.read().decode("utf-8", errors="replace").strip()
             error = stderr.read().decode("utf-8", errors="replace").strip()
             codigo = stdout.channel.recv_exit_status()

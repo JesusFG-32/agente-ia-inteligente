@@ -94,7 +94,17 @@ class AdaptadorDocker:
             if self._cliente_ssh is None:
                 return ""
             try:
-                _, stdout, stderr = self._cliente_ssh.exec_command(cmd, timeout=10)
+                # Inyectar el flag -S para que sudo lea la contraseña desde stdin
+                if "sudo " in cmd and "sudo -S" not in cmd:
+                    cmd = cmd.replace("sudo ", "sudo -S ")
+
+                stdin, stdout, stderr = self._cliente_ssh.exec_command(cmd, timeout=10)
+                
+                # Escribir la contraseña si el comando contiene sudo -S
+                if "sudo -S " in cmd and self.password:
+                    stdin.write(self.password + "\n")
+                    stdin.flush()
+
                 salida = stdout.read().decode("utf-8", errors="replace").strip()
                 return salida
             except Exception as e:
