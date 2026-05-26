@@ -38,6 +38,8 @@ app.secret_key = config.SECRET_KEY
 CORS(app)
 
 # ─── Inicializar servicios (lazy) ─────────────────────────────
+import threading
+
 _db: BaseDatos | None = None
 _mongodb: AdaptadorMongoDB | None = None
 _agente: AgenteIA | None = None
@@ -46,115 +48,139 @@ _mariadb: AdaptadorMariaDB | None = None
 _sistema: AdaptadorSistema | None = None
 _docker: AdaptadorDocker | None = None
 
+_lock_db = threading.Lock()
+_lock_mongodb = threading.Lock()
+_lock_agente = threading.Lock()
+_lock_nginx = threading.Lock()
+_lock_mariadb = threading.Lock()
+_lock_sistema = threading.Lock()
+_lock_docker = threading.Lock()
+
 
 def get_docker() -> AdaptadorDocker | None:
     global _docker
     if _docker is None:
-        try:
-            nginx = get_nginx()
-            ssh_client = nginx._cliente if nginx else None
-            _docker = AdaptadorDocker(
-                host=config.VPS_HOST,
-                user=config.VPS_USER,
-                key_path=config.VPS_KEY_PATH,
-                port=config.VPS_PORT,
-                ssh_client=ssh_client,
-            )
-        except Exception as e:
-            logger.error("No se pudo conectar SSH para Docker: %s", e)
+        with _lock_docker:
+            if _docker is None:
+                try:
+                    nginx = get_nginx()
+                    ssh_client = nginx._cliente if nginx else None
+                    _docker = AdaptadorDocker(
+                        host=config.VPS_HOST,
+                        user=config.VPS_USER,
+                        key_path=config.VPS_KEY_PATH,
+                        password=config.VPS_PASSWORD,
+                        auth_method=config.VPS_AUTH_METHOD,
+                        port=config.VPS_PORT,
+                        ssh_client=ssh_client,
+                    )
+                except Exception as e:
+                    logger.error("No se pudo conectar SSH para Docker: %s", e)
     return _docker
 
 
 def get_sistema() -> AdaptadorSistema | None:
     global _sistema
     if _sistema is None:
-        try:
-            # Reutiliza el cliente SSH de Nginx si está disponible para no duplicar conexiones SSH
-            nginx = get_nginx()
-            ssh_client = nginx._cliente if nginx else None
-            _sistema = AdaptadorSistema(
-                host=config.VPS_HOST,
-                user=config.VPS_USER,
-                key_path=config.VPS_KEY_PATH,
-                password=config.VPS_PASSWORD,
-                auth_method=config.VPS_AUTH_METHOD,
-                port=config.VPS_PORT,
-                ssh_client=ssh_client,
-            )
-        except Exception as e:
-            logger.error("No se pudo conectar SSH para Sistema: %s", e)
+        with _lock_sistema:
+            if _sistema is None:
+                try:
+                    # Reutiliza el cliente SSH de Nginx si está disponible para no duplicar conexiones SSH
+                    nginx = get_nginx()
+                    ssh_client = nginx._cliente if nginx else None
+                    _sistema = AdaptadorSistema(
+                        host=config.VPS_HOST,
+                        user=config.VPS_USER,
+                        key_path=config.VPS_KEY_PATH,
+                        password=config.VPS_PASSWORD,
+                        auth_method=config.VPS_AUTH_METHOD,
+                        port=config.VPS_PORT,
+                        ssh_client=ssh_client,
+                    )
+                except Exception as e:
+                    logger.error("No se pudo conectar SSH para Sistema: %s", e)
     return _sistema
 
 
 def get_db() -> BaseDatos | None:
     global _db
     if _db is None:
-        try:
-            _db = BaseDatos(
-                host=config.DB_HOST,
-                port=config.DB_PORT,
-                database=config.DB_NAME,
-                user=config.DB_USER,
-                password=config.DB_PASSWORD,
-            )
-        except Exception as e:
-            logger.error("No se pudo conectar a PostgreSQL: %s", e)
+        with _lock_db:
+            if _db is None:
+                try:
+                    _db = BaseDatos(
+                        host=config.DB_HOST,
+                        port=config.DB_PORT,
+                        database=config.DB_NAME,
+                        user=config.DB_USER,
+                        password=config.DB_PASSWORD,
+                    )
+                except Exception as e:
+                    logger.error("No se pudo conectar a PostgreSQL: %s", e)
     return _db
 
 
 def get_mongodb() -> AdaptadorMongoDB | None:
     global _mongodb
     if _mongodb is None and config.MONGO_URI:
-        try:
-            _mongodb = AdaptadorMongoDB(
-                uri=config.MONGO_URI,
-                db_name=config.MONGO_DB_NAME,
-                collection_name=config.MONGO_COLLECTION_NAME,
-            )
-        except Exception as e:
-            logger.error("No se pudo conectar a MongoDB: %s", e)
+        with _lock_mongodb:
+            if _mongodb is None and config.MONGO_URI:
+                try:
+                    _mongodb = AdaptadorMongoDB(
+                        uri=config.MONGO_URI,
+                        db_name=config.MONGO_DB_NAME,
+                        collection_name=config.MONGO_COLLECTION_NAME,
+                    )
+                except Exception as e:
+                    logger.error("No se pudo conectar a MongoDB: %s", e)
     return _mongodb
 
 
 def get_agente() -> AgenteIA | None:
     global _agente
     if _agente is None:
-        try:
-            _agente = AgenteIA(db=get_db(), mongodb=get_mongodb())
-        except Exception as e:
-            logger.error("No se pudo inicializar AgenteIA: %s", e)
+        with _lock_agente:
+            if _agente is None:
+                try:
+                    _agente = AgenteIA(db=get_db(), mongodb=get_mongodb())
+                except Exception as e:
+                    logger.error("No se pudo inicializar AgenteIA: %s", e)
     return _agente
 
 
 def get_nginx() -> AdaptadorNginx | None:
     global _nginx
     if _nginx is None and config.VPS_HOST:
-        try:
-            _nginx = AdaptadorNginx(
-                host=config.VPS_HOST,
-                user=config.VPS_USER,
-                key_path=config.VPS_KEY_PATH,
-                password=config.VPS_PASSWORD,
-                auth_method=config.VPS_AUTH_METHOD,
-                port=config.VPS_PORT,
-            )
-        except Exception as e:
-            logger.error("No se pudo conectar SSH para Nginx: %s", e)
+        with _lock_nginx:
+            if _nginx is None and config.VPS_HOST:
+                try:
+                    _nginx = AdaptadorNginx(
+                        host=config.VPS_HOST,
+                        user=config.VPS_USER,
+                        key_path=config.VPS_KEY_PATH,
+                        password=config.VPS_PASSWORD,
+                        auth_method=config.VPS_AUTH_METHOD,
+                        port=config.VPS_PORT,
+                    )
+                except Exception as e:
+                    logger.error("No se pudo conectar SSH para Nginx: %s", e)
     return _nginx
 
 
 def get_mariadb() -> AdaptadorMariaDB | None:
     global _mariadb
     if _mariadb is None and config.MARIADB_HOST:
-        try:
-            _mariadb = AdaptadorMariaDB(
-                host=config.MARIADB_HOST,
-                user=config.MARIADB_USER,
-                password=config.MARIADB_PASSWORD,
-                port=config.MARIADB_PORT,
-            )
-        except Exception as e:
-            logger.error("No se pudo conectar a MariaDB: %s", e)
+        with _lock_mariadb:
+            if _mariadb is None and config.MARIADB_HOST:
+                try:
+                    _mariadb = AdaptadorMariaDB(
+                        host=config.MARIADB_HOST,
+                        user=config.MARIADB_USER,
+                        password=config.MARIADB_PASSWORD,
+                        port=config.MARIADB_PORT,
+                    )
+                except Exception as e:
+                    logger.error("No se pudo conectar a MariaDB: %s", e)
     return _mariadb
 
 
